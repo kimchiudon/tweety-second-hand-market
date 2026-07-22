@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: tweety-market
+    runtime: python
+    region: singapore
+    plan: starter
+    buildCommand: pip install .
+    startCommand: python -m scripts.bootstrap_admin && gunicorn tiny_market.wsgi:application --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 60 --access-logfile -
+    healthCheckPath: /health
+    autoDeployTrigger: commit
+    envVars:
+      - key: TINY_MARKET_ENV
+        value: production
+      - key: TINY_MARKET_DB
+        value: /var/data/market.db
+      - key: TINY_MARKET_ADMIN_USERNAME
+        value: adminishailey
+      - key: TINY_MARKET_ADMIN_PASSWORD
+        sync: false
+      - key: PYTHON_VERSION
+        value: 3.13.11
+    disk:
+      name: tweety-data
+      mountPath: /var/data
+      sizeGB: 5

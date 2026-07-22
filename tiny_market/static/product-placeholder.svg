@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 500" role="img" aria-labelledby="title desc">
+  <title id="title">Tweety 상품 이미지</title>
+  <desc id="desc">따뜻한 노란색 배경의 재사용 상자 일러스트</desc>
+  <rect width="800" height="500" fill="#fff7df"/>
+  <circle cx="400" cy="250" r="155" fill="#fff0a6"/>
+  <path d="M288 204 400 144l112 60-112 61z" fill="#fffef9" stroke="#176b63" stroke-width="12" stroke-linejoin="round"/>
+  <path d="M288 204v126l112 62V265zm224 0v126l-112 62V265z" fill="#fffaf0" stroke="#176b63" stroke-width="12" stroke-linejoin="round"/>
+  <path d="M362 302c23-38 67-48 102-22-21 1-38 9-50 25 17-5 34-4 49 3-27 35-73 40-101 12" fill="none" stroke="#ed7d3b" stroke-width="12" stroke-linecap="round"/>
+</svg>

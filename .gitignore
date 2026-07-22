@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+*.db
+*.db-shm
+*.db-wal
+.DS_Store
+.env
+.venv/
+*.egg-info/
+.coverage
+.pytest_cache/
+uploads/
+tmp/
+work/
+outputs/
+!outputs/.gitkeep
