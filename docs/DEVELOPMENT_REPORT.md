@@ -99,4 +99,4 @@ Codex를 수업 PDF 요구사항 추출, 위협 모델링, 구현 초안, 공격
 
 ## 10. 저장소
 
-Public GitHub repository: `<PUBLIC_GITHUB_REPOSITORY_URL>`
+Public GitHub repository: `https://github.com/kimchiudon/tweety-second-hand-market`

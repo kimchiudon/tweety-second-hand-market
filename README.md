@@ -23,7 +23,7 @@ Tiny보다 더 작고 가벼운 느낌의, 보안을 우선한 중고 거래 웹
 - Linux, macOS, WSL에서 실행 가능
 
 ```bash
-git clone <PUBLIC_GITHUB_REPOSITORY_URL>
+git clone https://github.com/kimchiudon/tweety-second-hand-market.git
 cd tiny-second-hand-shopping-platform
 python3 -m venv .venv
 source .venv/bin/activate
