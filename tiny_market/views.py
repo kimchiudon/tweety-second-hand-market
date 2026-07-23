@@ -63,6 +63,7 @@ def layout(title: str, content: str, *, user=None, csrf_token: str = "") -> str:
   <title>{e(title)} | Tweety</title>
   <link rel="stylesheet" href="/static/style.css">
   <link rel="stylesheet" href="/static/category-filter.css">
+  <link rel="stylesheet" href="/static/upload-picker.css">
   {'<script src="/static/notifications.js" defer></script>' if user else ''}
 </head>
 <body>
@@ -189,7 +190,7 @@ def product_form(*, product=None, error_items=None, csrf_token: str, user=None) 
         <label for="image">상품 사진</label>
         {current_image}
         <input id="image" name="images" type="file" accept=".png,.jpg,.jpeg,image/png,image/jpeg" multiple data-max-files="10" data-error-target="product-image-error" aria-describedby="product-image-help product-image-error"{required}>
-        <p id="product-image-help" class="help">PNG/JPEG 사진을 최대 10장까지 선택할 수 있습니다. 서버가 안전하게 다시 저장하며 위치정보 등 메타데이터는 제거됩니다.</p><p id="product-image-error" class="alert error compact" role="alert" hidden>사진은 최대 10장까지만 선택할 수 있습니다. 다시 선택해 주세요.</p>
+        <p id="product-image-help" class="help">PNG/JPEG 사진을 최대 10장까지 선택할 수 있습니다. 여러 번 나눠 선택해도 기존 선택에 추가되며 아래 목록에서 개별 삭제할 수 있습니다. 서버가 안전하게 다시 저장하며 위치정보 등 메타데이터는 제거됩니다.</p><p id="product-image-error" class="alert error compact" role="alert" hidden>사진은 최대 10장까지만 선택할 수 있습니다. 아래 목록을 확인해 주세요.</p>
         <label for="description">설명</label>
         <textarea id="description" name="description" required minlength="10" maxlength="2000" rows="8">{e(values.get('description', ''))}</textarea>
         <p class="help">연락처, 주소 등 개인정보는 상품 설명에 작성하지 마세요.</p>
@@ -321,7 +322,7 @@ def chat_page(messages, product, counterpart, *, user, csrf_token: str) -> str:
         image = '<div class="chat-image-grid">' + "".join(f'<a href="/chat-uploads/{e(filename)}" target="_blank" rel="noopener"><img class="chat-image" src="/chat-uploads/{e(filename)}" alt="채팅으로 보낸 사진 {index}"></a>' for index, filename in enumerate(filenames, 1)) + '</div>' if filenames else ""
         message_parts.append(f'<article class="message-row"><strong>{e(message["sender_name"])}</strong><time>{e(message["created_at"])}</time>{image}<p>{e(message["body"])}</p></article>')
     message_rows = "".join(message_parts) or '<p class="empty compact">첫 메시지를 남겨보세요.</p>'
-    composer = f'''<form method="post" action="/chat/send" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{e(csrf_token)}"><input type="hidden" name="product_id" value="{product["id"]}"><input type="hidden" name="counterpart_id" value="{counterpart["id"]}"><label for="body">메시지</label><textarea id="body" name="body" maxlength="500" rows="3" placeholder="메시지나 사진 중 하나만 보내도 됩니다. 개인정보는 보내지 마세요."></textarea><label for="chat-image">사진 첨부</label><input id="chat-image" name="images" type="file" accept=".png,.jpg,.jpeg,image/png,image/jpeg" multiple data-max-files="10" data-error-target="chat-image-error" aria-describedby="chat-image-help chat-image-error"><p id="chat-image-help" class="help">PNG/JPEG 사진을 최대 10장까지 선택할 수 있습니다. 서버가 안전하게 다시 저장하고 메타데이터를 제거합니다.</p><p id="chat-image-error" class="alert error compact" role="alert" hidden>사진은 최대 10장까지만 선택할 수 있습니다. 다시 선택해 주세요.</p><button type="submit">메시지 보내기</button></form>''' if user.get("status") == "active" else '<div class="restriction-note">활동 정지 중에는 기존 대화를 읽을 수 있지만 새 메시지는 보낼 수 없습니다.</div>'
+    composer = f'''<form method="post" action="/chat/send" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{e(csrf_token)}"><input type="hidden" name="product_id" value="{product["id"]}"><input type="hidden" name="counterpart_id" value="{counterpart["id"]}"><label for="body">메시지</label><textarea id="body" name="body" maxlength="500" rows="3" placeholder="메시지나 사진 중 하나만 보내도 됩니다. 개인정보는 보내지 마세요."></textarea><label for="chat-image">사진 첨부</label><input id="chat-image" name="images" type="file" accept=".png,.jpg,.jpeg,image/png,image/jpeg" multiple data-max-files="10" data-error-target="chat-image-error" aria-describedby="chat-image-help chat-image-error"><p id="chat-image-help" class="help">PNG/JPEG 사진을 최대 10장까지 선택할 수 있습니다. 여러 번 나눠 선택해도 누적되며 아래 목록에서 개별 삭제할 수 있습니다. 서버가 안전하게 다시 저장하고 메타데이터를 제거합니다.</p><p id="chat-image-error" class="alert error compact" role="alert" hidden>사진은 최대 10장까지만 선택할 수 있습니다. 아래 목록을 확인해 주세요.</p><button type="submit">메시지 보내기</button></form>''' if user.get("status") == "active" else '<div class="restriction-note">활동 정지 중에는 기존 대화를 읽을 수 있지만 새 메시지는 보낼 수 없습니다.</div>'
     report_link = f'<p><a class="text-danger" href="/report/chat/{product["id"]}/{counterpart["id"]}">이 채팅 신고하기</a></p>' if messages else ""
     content = f'''<section class="page-head"><p class="eyebrow">상품 1:1 채팅</p><h1>{heading}</h1><p><a href="/products/{product["id"]}">문의 상품: {e(product["title"])}</a></p>{report_link}</section><section class="panel chat"><div class="messages">{message_rows}</div>{composer}</section>'''
     return layout(heading, content, user=user, csrf_token=csrf_token)

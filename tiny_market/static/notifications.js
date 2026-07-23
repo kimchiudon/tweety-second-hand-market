@@ -31,18 +31,92 @@
 (() => {
   const inputs = document.querySelectorAll('input[type="file"][multiple][data-max-files]');
   for (const input of inputs) {
+    const selection = [];
+    const preview = document.createElement("div");
+    preview.className = "upload-selection";
+    preview.setAttribute("aria-live", "polite");
+    input.insertAdjacentElement("afterend", preview);
+
+    const keyFor = (file) => `${file.name}\u0000${file.size}\u0000${file.lastModified}\u0000${file.type}`;
+    const formatSize = (bytes) => bytes < 1024 * 1024
+      ? `${Math.max(1, Math.round(bytes / 1024))}KB`
+      : `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+
+    const syncInput = () => {
+      if (typeof DataTransfer === "undefined") return false;
+      const transfer = new DataTransfer();
+      for (const file of selection) transfer.items.add(file);
+      input.files = transfer.files;
+      return true;
+    };
+
+    const render = () => {
+      preview.replaceChildren();
+      if (!selection.length) return;
+      const summary = document.createElement("p");
+      summary.className = "upload-selection-summary";
+      summary.textContent = `선택한 사진 ${selection.length}장`;
+      preview.append(summary);
+      const list = document.createElement("ul");
+      list.className = "upload-selection-list";
+      selection.forEach((file, index) => {
+        const item = document.createElement("li");
+        const details = document.createElement("span");
+        details.textContent = `${file.name} · ${formatSize(file.size)}`;
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "upload-remove";
+        remove.textContent = "삭제";
+        remove.setAttribute("aria-label", `${file.name} 선택에서 삭제`);
+        remove.addEventListener("click", () => {
+          selection.splice(index, 1);
+          syncInput();
+          input.setCustomValidity("");
+          const error = document.getElementById(input.dataset.errorTarget || "");
+          if (error) error.hidden = true;
+          render();
+        });
+        item.append(details, remove);
+        list.append(item);
+      });
+      preview.append(list);
+    };
+
     input.addEventListener("change", () => {
       const maximum = Number(input.dataset.maxFiles) || 10;
       const error = document.getElementById(input.dataset.errorTarget || "");
-      if (input.files.length > maximum) {
-        input.value = "";
+      if (typeof DataTransfer === "undefined") {
+        if (input.files.length > maximum) {
+          input.value = "";
+          input.setCustomValidity(`사진은 최대 ${maximum}장까지만 선택할 수 있습니다.`);
+          if (error) error.hidden = false;
+          input.reportValidity();
+        } else {
+          input.setCustomValidity("");
+          if (error) error.hidden = true;
+        }
+        return;
+      }
+
+      const existing = new Set(selection.map(keyFor));
+      const additions = Array.from(input.files).filter((file) => !existing.has(keyFor(file)));
+      if (selection.length + additions.length > maximum) {
+        syncInput();
         input.setCustomValidity(`사진은 최대 ${maximum}장까지만 선택할 수 있습니다.`);
         if (error) error.hidden = false;
         input.reportValidity();
       } else {
+        selection.push(...additions);
+        syncInput();
         input.setCustomValidity("");
         if (error) error.hidden = true;
+        render();
       }
+    });
+
+    input.form?.addEventListener("reset", () => {
+      selection.splice(0);
+      preview.replaceChildren();
     });
   }
 })();

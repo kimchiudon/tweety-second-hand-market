@@ -1,0 +1,44 @@
+.upload-selection {
+  margin: 10px 0 16px;
+}
+
+.upload-selection-summary {
+  margin: 0 0 8px;
+  color: #315b3a;
+  font-size: 0.9rem;
+  font-weight: 800;
+}
+
+.upload-selection-list {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.upload-selection-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  padding: 9px 11px;
+  border: 1px solid #dfe4dd;
+  border-radius: 10px;
+  background: #f7f8f3;
+}
+
+.upload-selection-list span {
+  overflow: hidden;
+  font-size: 0.86rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.upload-remove {
+  flex: 0 0 auto;
+  padding: 5px 9px;
+  background: #a33a2d;
+  font-size: 0.78rem;
+}

@@ -691,6 +691,13 @@ class TinyMarketTests(unittest.TestCase):
         self.assertIn("실제 PNG/JPEG 형식이 일치해야 합니다", body)
         with (self.app.upload_dir / filename).open("rb") as stored:
             self.assertNotIn(b"PRIVATE-METADATA-MARKER", stored.read())
+        jpeg_output = io.BytesIO()
+        Image.new("RGB", (447, 447), (165, 147, 147)).save(jpeg_output, format="JPEG")
+        extension, sanitized = validate_image(
+            UploadedFile("images.jpeg", "image/jpeg", jpeg_output.getvalue())
+        )
+        self.assertEqual(extension, "jpg")
+        self.assertTrue(sanitized.startswith(b"\xff\xd8"))
 
     def test_webp_upload_is_rejected(self):
         seller = self.seed_user("webpseller")
