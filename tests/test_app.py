@@ -225,6 +225,7 @@ class TinyMarketTests(unittest.TestCase):
         self.assertNotIn("차단 판매자 노트북", body)
         self.assertNotIn("정지 판매자 노트북", body)
         self.assertIn('name="category" value="digital"', body)
+        self.assertIn('class="category-chip is-active" href="/?category=digital" aria-current="page">디지털</a>', body)
 
         status, _, body = self.client.request("GET", "/?category=digital&q=%EB%85%B8")
         self.assertEqual(status, 200)
