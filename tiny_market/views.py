@@ -297,7 +297,8 @@ def chat_page(messages, product, counterpart, *, user, csrf_token: str) -> str:
         message_parts.append(f'<article class="message-row"><strong>{e(message["sender_name"])}</strong><time>{e(message["created_at"])}</time>{image}<p>{e(message["body"])}</p></article>')
     message_rows = "".join(message_parts) or '<p class="empty compact">첫 메시지를 남겨보세요.</p>'
     composer = f'''<form method="post" action="/chat/send" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{e(csrf_token)}"><input type="hidden" name="product_id" value="{product["id"]}"><input type="hidden" name="counterpart_id" value="{counterpart["id"]}"><label for="body">메시지</label><textarea id="body" name="body" maxlength="500" rows="3" placeholder="메시지나 사진 중 하나만 보내도 됩니다. 개인정보는 보내지 마세요."></textarea><label for="chat-image">사진 첨부</label><input id="chat-image" name="images" type="file" accept=".png,.jpg,.jpeg,image/png,image/jpeg" multiple data-max-files="10" data-error-target="chat-image-error" aria-describedby="chat-image-help chat-image-error"><p id="chat-image-help" class="help">PNG/JPEG 사진을 최대 10장까지 선택할 수 있습니다. 서버가 안전하게 다시 저장하고 메타데이터를 제거합니다.</p><p id="chat-image-error" class="alert error compact" role="alert" hidden>사진은 최대 10장까지만 선택할 수 있습니다. 다시 선택해 주세요.</p><button type="submit">메시지 보내기</button></form>''' if user.get("status") == "active" else '<div class="restriction-note">활동 정지 중에는 기존 대화를 읽을 수 있지만 새 메시지는 보낼 수 없습니다.</div>'
-    content = f'''<section class="page-head"><p class="eyebrow">상품 1:1 채팅</p><h1>{heading}</h1><p><a href="/products/{product["id"]}">문의 상품: {e(product["title"])}</a></p></section><section class="panel chat"><div class="messages">{message_rows}</div>{composer}</section>'''
+    report_link = f'<p><a class="text-danger" href="/report/chat/{product["id"]}/{counterpart["id"]}">이 채팅 신고하기</a></p>' if messages else ""
+    content = f'''<section class="page-head"><p class="eyebrow">상품 1:1 채팅</p><h1>{heading}</h1><p><a href="/products/{product["id"]}">문의 상품: {e(product["title"])}</a></p>{report_link}</section><section class="panel chat"><div class="messages">{message_rows}</div>{composer}</section>'''
     return layout(heading, content, user=user, csrf_token=csrf_token)
 
 
@@ -305,6 +306,11 @@ def report_page(target_type: str, target, *, user, csrf_token: str, error_items=
     label = target["title"] if target_type == "product" else target["nickname"]
     content = f'''<section class="form-shell narrow"><p class="eyebrow">안전 거래</p><h1>{e(label)} 신고</h1>{errors(error_items or [])}<p>관리자가 검토할 수 있도록 구체적인 사유를 작성해 주세요.</p><form method="post"><input type="hidden" name="csrf_token" value="{e(csrf_token)}"><label for="reason">신고 사유</label><textarea id="reason" name="reason" minlength="10" maxlength="500" required rows="6"></textarea><button class="danger" type="submit">신고 접수</button></form></section>'''
     return layout("신고", content, user=user, csrf_token=csrf_token)
+
+
+def chat_report_page(counterpart, product, *, user, csrf_token: str, max_reason_length: int, error_items=None, reason: str = "") -> str:
+    content = f'''<section class="form-shell narrow"><p class="eyebrow">채팅 안전 신고</p><h1>{e(counterpart["nickname"])}님과의 채팅 신고</h1>{errors(error_items or [])}<p><strong>대화 상품:</strong> {e(product["title"])}</p><p>관리자가 신고 사유와 해당 대화 상품을 함께 확인할 수 있습니다. 개인정보는 적지 말고 문제가 된 상황을 구체적으로 작성해 주세요.</p><form method="post"><input type="hidden" name="csrf_token" value="{e(csrf_token)}"><label for="reason">신고 사유</label><textarea id="reason" name="reason" minlength="10" maxlength="{max_reason_length}" required rows="6">{e(reason)}</textarea><p class="help">10~{max_reason_length}자</p><button class="danger" type="submit">채팅 신고 접수</button></form></section>'''
+    return layout("채팅 신고", content, user=user, csrf_token=csrf_token)
 
 
 def admin_page(users, products, reports, blocks, *, user, csrf_token: str) -> str:
