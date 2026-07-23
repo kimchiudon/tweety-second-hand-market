@@ -62,6 +62,7 @@ def layout(title: str, content: str, *, user=None, csrf_token: str = "") -> str:
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{e(title)} | Tweety</title>
   <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/category-filter.css">
   {'<script src="/static/notifications.js" defer></script>' if user else ''}
 </head>
 <body>
@@ -105,9 +106,11 @@ def home(products, *, query: str, category: str = "", user=None, csrf_token: str
         if value:
             params["category"] = value
         href = "/?" + urlencode(params) if params else "/"
-        text = f"<strong>{e(label)}</strong>" if value == category else e(label)
-        category_links.append(f'<a href="{e(href)}">{text}</a>')
-    category_navigation = " · ".join(category_links)
+        active = value == category
+        state = " is-active" if active else ""
+        current = ' aria-current="page"' if active else ""
+        category_links.append(f'<a class="category-chip{state}" href="{e(href)}"{current}>{e(label)}</a>')
+    category_navigation = "".join(category_links)
     hidden_category = f'<input type="hidden" name="category" value="{e(category)}">' if category else ""
     section_title = CATEGORIES.get(category, "최근 상품")
     content = f"""
@@ -123,7 +126,7 @@ def home(products, *, query: str, category: str = "", user=None, csrf_token: str
       <input id="q" name="q" maxlength="80" value="{e(query)}" placeholder="상품명이나 설명을 검색하세요">
       <button type="submit">검색</button>
     </form>
-    <nav aria-label="상품 분류"><p>{category_navigation}</p></nav>
+    <nav class="category-filter" aria-label="상품 분류">{category_navigation}</nav>
     <div class="section-title"><h2>{e(section_title)}</h2><span>{len(products)}개</span></div>
     <section class="grid">{listing}</section>"""
     return layout("중고 거래", content, user=user, csrf_token=csrf_token)
