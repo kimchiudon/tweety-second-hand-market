@@ -48,6 +48,8 @@
 
 - 총 30개 테스트
 - 성공 30개 / 실패 0개 / 오류 0개
+- `docker compose config --quiet` 구성 검사 성공
+- Docker 테스트 이미지 명령: `docker build --target test --progress=plain -t tweety-market:test .`
 - 실제 브라우저 점검: 회원가입, 세션 회전, 상품 등록·상세, Tweety 홈·송금 확인 화면, 데스크톱·390px 모바일 화면 정상
 
 ## 유지보수 재점검 조건

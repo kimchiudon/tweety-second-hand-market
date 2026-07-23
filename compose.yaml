@@ -1,0 +1,27 @@
+services:
+  tweety:
+    build:
+      context: .
+      target: runtime
+    image: tweety-market:local
+    init: true
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      TINY_MARKET_ENV: development
+      TINY_MARKET_DB: /data/market.db
+      TINY_MARKET_ADMIN_USERNAME: ${TINY_MARKET_ADMIN_USERNAME:-}
+      TINY_MARKET_ADMIN_PASSWORD: ${TINY_MARKET_ADMIN_PASSWORD:-}
+    volumes:
+      - tweety-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+volumes:
+  tweety-data:
