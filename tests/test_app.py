@@ -173,9 +173,21 @@ class TinyMarketTests(unittest.TestCase):
     def test_xss_is_escaped_and_search_is_parameterized(self):
         seller = self.seed_user("seller")
         self.seed_product(seller, title='<script>alert("x")</script>')
-        status, _, body = self.client.request("GET", "/?q=%27%20OR%201%3D1--")
-        self.assertEqual(status, 200)
-        self.assertNotIn("안전한 자전거", body)
+        safe_product = self.seed_product(seller, title="가방")
+        payloads = [
+            "' OR 1=1--",
+            "' UNION SELECT password_hash FROM users--",
+            "'; DROP TABLE products;--",
+            "%' OR 'x'='x",
+        ]
+        for payload in payloads:
+            status, _, body = self.client.request("GET", "/?" + urlencode({"q": payload}))
+            self.assertEqual(status, 200)
+            self.assertNotIn("가방", body)
+            self.assertNotIn("test-only", body)
+        with connect(self.app.config.database_path) as connection:
+            self.assertIsNotNone(connection.execute("SELECT id FROM products WHERE id=?", (safe_product,)).fetchone())
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM users").fetchone()[0], 1)
         _, _, body = self.client.request("GET", "/")
         self.assertNotIn('<script>alert("x")</script>', body)
         self.assertIn("&lt;script&gt;", body)
@@ -257,11 +269,52 @@ class TinyMarketTests(unittest.TestCase):
         status, _, _ = self.client.request("GET", f"/products/{product}")
         self.assertEqual(status, 404)
 
-    def test_admin_route_rejects_normal_user(self):
-        user_id = self.seed_user("normal")
-        self.client.login_as(user_id)
-        status, _, _ = self.client.request("GET", "/admin")
+    def test_admin_endpoints_require_live_server_side_admin_session(self):
+        normal = self.seed_user("normal")
+        target = self.seed_user("target")
+        admin = self.seed_user("adminuser", role="admin")
+        product = self.seed_product(normal)
+        with connect(self.app.config.database_path) as connection:
+            report_id = connection.execute(
+                "INSERT INTO reports(reporter_id,target_type,target_id,reason) VALUES (?,?,?,?)",
+                (normal, "user", target, "관리자 권한 검사를 위한 충분한 신고 사유"),
+            ).lastrowid
+            block_id = connection.execute(
+                "INSERT INTO user_blocks(blocker_id,blocked_id) VALUES (?,?)",
+                (normal, target),
+            ).lastrowid
+
+        self.client.login_as(normal)
+        csrf = self.client.db_csrf()
+        attempts = [
+            ("GET", "/admin", None),
+            ("POST", f"/admin/user/{target}/toggle", {"csrf_token": csrf, "mb_level": "10"}),
+            ("POST", f"/admin/product/{product}/delete", {"csrf_token": csrf, "role": "admin"}),
+            ("POST", f"/admin/report/{report_id}/resolve", {"csrf_token": csrf}),
+            ("POST", f"/admin/block/{block_id}/delete", {"csrf_token": csrf}),
+        ]
+        for method, path, data in attempts:
+            status, _, _ = self.client.request(method, path, data)
+            self.assertEqual(status, 403)
+
+        forged = Client(self.app)
+        forged.cookie = "tiny_session=forged-admin-token"
+        status, _, _ = forged.request("GET", "/admin?mb_level=10&role=admin")
+        self.assertEqual(status, 401)
+
+        admin_client = Client(self.app)
+        admin_client.login_as(admin)
+        status, _, _ = admin_client.request("GET", "/admin")
+        self.assertEqual(status, 200)
+        with connect(self.app.config.database_path) as connection:
+            connection.execute("UPDATE users SET role='user' WHERE id=?", (admin,))
+        status, _, _ = admin_client.request("GET", "/admin")
         self.assertEqual(status, 403)
+
+        with connect(self.app.config.database_path) as connection:
+            self.assertEqual(connection.execute("SELECT status FROM users WHERE id=?", (target,)).fetchone()[0], "active")
+            self.assertEqual(connection.execute("SELECT status FROM reports WHERE id=?", (report_id,)).fetchone()[0], "open")
+            self.assertIsNotNone(connection.execute("SELECT 1 FROM user_blocks WHERE id=?", (block_id,)).fetchone())
 
     def test_direct_messages_are_private(self):
         alice = self.seed_user("alice")
