@@ -38,6 +38,8 @@ def migrate(connection: sqlite3.Connection) -> None:
     if "nickname" not in user_columns:
         connection.execute("ALTER TABLE users ADD COLUMN nickname TEXT COLLATE NOCASE")
         connection.execute("UPDATE users SET nickname=username WHERE nickname IS NULL")
+    if "deleted_at" not in user_columns:
+        connection.execute("ALTER TABLE users ADD COLUMN deleted_at TEXT")
     connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_nickname_unique ON users(nickname COLLATE NOCASE)")
 
     product_columns = {row["name"] for row in connection.execute("PRAGMA table_info(products)")}

@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS users (
     balance INTEGER NOT NULL DEFAULT 100000,
     role TEXT NOT NULL DEFAULT 'user',
     status TEXT NOT NULL DEFAULT 'active',
+    deleted_at TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK (length(username) BETWEEN 3 AND 24),
     CHECK (length(nickname) BETWEEN 2 AND 20),

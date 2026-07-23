@@ -202,6 +202,42 @@ class TinyMarketTests(unittest.TestCase):
         self.assertIn("파란 모자", body)
         self.assertNotIn("노트북", body)
 
+    def test_category_filter_combines_with_search_and_access_rules(self):
+        seller = self.seed_user("categoryseller")
+        blocked_seller = self.seed_user("blockedseller")
+        suspended_seller = self.seed_user("suspendedseller")
+        viewer = self.seed_user("viewer")
+        laptop = self.seed_product(seller, title="노란 노트북")
+        bag = self.seed_product(seller, title="파란 가방")
+        blocked_product = self.seed_product(blocked_seller, title="차단 판매자 노트북")
+        suspended_product = self.seed_product(suspended_seller, title="정지 판매자 노트북")
+        with connect(self.app.config.database_path) as connection:
+            connection.execute("UPDATE products SET category='digital' WHERE id IN (?,?,?)", (laptop, blocked_product, suspended_product))
+            connection.execute("UPDATE products SET category='fashion' WHERE id=?", (bag,))
+            connection.execute("UPDATE users SET status='suspended' WHERE id=?", (suspended_seller,))
+            connection.execute("INSERT INTO user_blocks(blocker_id,blocked_id) VALUES (?,?)", (viewer, blocked_seller))
+
+        self.client.login_as(viewer)
+        status, _, body = self.client.request("GET", "/?category=digital")
+        self.assertEqual(status, 200)
+        self.assertIn("노란 노트북", body)
+        self.assertNotIn("파란 가방", body)
+        self.assertNotIn("차단 판매자 노트북", body)
+        self.assertNotIn("정지 판매자 노트북", body)
+        self.assertIn('name="category" value="digital"', body)
+
+        status, _, body = self.client.request("GET", "/?category=digital&q=%EB%85%B8")
+        self.assertEqual(status, 200)
+        self.assertIn("노란 노트북", body)
+        status, _, body = self.client.request("GET", "/?category=fashion&q=%EB%85%B8")
+        self.assertEqual(status, 200)
+        self.assertNotIn("노란 노트북", body)
+
+        status, _, _ = self.client.request("GET", "/?category=digital%27%20OR%201%3D1--")
+        self.assertEqual(status, 400)
+        with connect(self.app.config.database_path) as connection:
+            self.assertIsNotNone(connection.execute("SELECT 1 FROM products WHERE id=?", (laptop,)).fetchone())
+
     def test_only_owner_can_edit_or_delete(self):
         seller = self.seed_user("seller")
         attacker = self.seed_user("attacker")
@@ -520,11 +556,106 @@ class TinyMarketTests(unittest.TestCase):
         self.assertIn("새 메시지는 보낼 수 없습니다", chat)
         with connect(self.app.config.database_path) as connection:
             self.assertIsNotNone(connection.execute("SELECT read_at FROM messages").fetchone()[0])
-
         anonymous = Client(self.app)
         _, _, home = anonymous.request("GET", "/")
         self.assertNotIn("정지 판매자의 숨김 상품", home)
         self.assertNotIn(f'/products/{hidden_product}', home)
+
+    def test_withdrawal_anonymizes_account_revokes_sessions_and_hides_products(self):
+        member = self.seed_user("leaving")
+        admin = self.seed_user("adminuser", role="admin")
+        product = self.seed_product(member, title="탈퇴 전 판매 상품")
+        password = "StrongPass123"
+        image_filename = "a" * 32 + ".png"
+        (self.app.upload_dir / image_filename).write_bytes(png_bytes())
+        with connect(self.app.config.database_path) as connection:
+            connection.execute(
+                "UPDATE users SET password_hash=? WHERE id=?",
+                (hash_password(password, iterations=100_000), member),
+            )
+            connection.execute("UPDATE products SET image_filename=? WHERE id=?", (image_filename, product))
+            connection.execute(
+                "INSERT INTO product_images(product_id,filename,position) VALUES (?,?,0)",
+                (product, image_filename),
+            )
+
+        self.client.login_as(member)
+        another_device = Client(self.app)
+        another_device.login_as(member)
+        status, _, _ = Client(self.app).request("GET", f"/uploads/{image_filename}")
+        self.assertEqual(status, 200)
+        status, _, page = self.client.request("GET", "/account/withdraw")
+        self.assertEqual(status, 200)
+        self.assertIn("회원탈퇴", page)
+
+        status, _, page = self.client.request(
+            "POST", "/account/withdraw",
+            {
+                "csrf_token": self.client.db_csrf(),
+                "current_password": "WrongPassword123",
+                "confirmation": "회원탈퇴",
+            },
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("현재 비밀번호가 올바르지 않습니다", page)
+
+        status, headers, _ = self.client.request(
+            "POST", "/account/withdraw",
+            {
+                "csrf_token": self.client.db_csrf(),
+                "current_password": password,
+                "confirmation": "회원탈퇴",
+            },
+        )
+        self.assertEqual(status, 302)
+        self.assertEqual(headers["Location"], "/")
+        self.assertEqual(self.client.cookie, "tiny_session=")
+
+        with connect(self.app.config.database_path) as connection:
+            withdrawn = connection.execute(
+                "SELECT username,nickname,password_hash,bio,status,deleted_at FROM users WHERE id=?",
+                (member,),
+            ).fetchone()
+            self.assertNotEqual(withdrawn["username"], "leaving")
+            self.assertTrue(withdrawn["nickname"].startswith("탈퇴한회원-"))
+            self.assertFalse(verify_password(password, withdrawn["password_hash"]))
+            self.assertEqual(withdrawn["bio"], "")
+            self.assertEqual(withdrawn["status"], "suspended")
+            self.assertIsNotNone(withdrawn["deleted_at"])
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM sessions WHERE user_id=?", (member,)).fetchone()[0], 0)
+            self.assertEqual(connection.execute("SELECT moderation_status FROM products WHERE id=?", (product,)).fetchone()[0], "hidden")
+
+        status, _, _ = another_device.request("GET", "/my")
+        self.assertEqual(status, 401)
+        status, _, product_page = Client(self.app).request("GET", f"/products/{product}")
+        self.assertEqual(status, 404)
+        self.assertIn("탈퇴한 회원입니다", product_page)
+        status, _, _ = Client(self.app).request("GET", f"/uploads/{image_filename}")
+        self.assertEqual(status, 404)
+        status, _, profile_page = Client(self.app).request("GET", f"/users/{member}")
+        self.assertEqual(status, 404)
+        self.assertIn("탈퇴한 회원입니다", profile_page)
+        _, _, home = Client(self.app).request("GET", "/")
+        self.assertNotIn("탈퇴 전 판매 상품", home)
+
+        login_client = Client(self.app)
+        login_client.request("GET", "/login")
+        status, _, _ = login_client.request(
+            "POST", "/login",
+            {"csrf_token": login_client.db_csrf(), "username": "leaving", "password": password},
+        )
+        self.assertEqual(status, 401)
+
+        admin_client = Client(self.app)
+        admin_client.login_as(admin)
+        status, _, admin_page = admin_client.request("GET", "/admin")
+        self.assertEqual(status, 200)
+        self.assertIn("탈퇴 회원", admin_page)
+        status, _, _ = admin_client.request(
+            "POST", f"/admin/user/{member}/toggle",
+            {"csrf_token": admin_client.db_csrf()},
+        )
+        self.assertEqual(status, 409)
 
     def test_nickname_is_unique_case_insensitively(self):
         with connect(self.app.config.database_path) as connection:
