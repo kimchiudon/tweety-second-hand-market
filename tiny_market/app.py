@@ -328,11 +328,20 @@ class TinyMarketApp:
                 block_sql = " AND NOT EXISTS (SELECT 1 FROM user_blocks b WHERE (b.blocker_id=? AND b.blocked_id=p.seller_id) OR (b.blocker_id=p.seller_id AND b.blocked_id=?))"
                 params.extend([user["id"], user["id"]])
             if query:
-                escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-                products = connection.execute(
-                    "SELECT p.*, u.nickname seller_name FROM products p JOIN users u ON u.id=p.seller_id WHERE p.moderation_status='visible' AND u.status='active'" + block_sql + " AND (p.title LIKE ? ESCAPE '\\' OR p.description LIKE ? ESCAPE '\\') ORDER BY p.created_at DESC, p.id DESC LIMIT 100",
-                    (*params, f"%{escaped}%", f"%{escaped}%"),
-                ).fetchall()
+                # Match when at least one meaningful character from the query
+                # appears in the product title. Deduplication and a hard cap
+                # keep the generated, fully parameterized SQL bounded.
+                characters = list(dict.fromkeys(character for character in query if character.isalnum()))[:32]
+                if characters:
+                    character_sql = " OR ".join("p.title LIKE ?" for _ in characters)
+                    products = connection.execute(
+                        "SELECT p.*, u.nickname seller_name FROM products p JOIN users u ON u.id=p.seller_id WHERE p.moderation_status='visible' AND u.status='active'"
+                        + block_sql
+                        + f" AND ({character_sql}) ORDER BY p.created_at DESC, p.id DESC LIMIT 100",
+                        (*params, *(f"%{character}%" for character in characters)),
+                    ).fetchall()
+                else:
+                    products = []
             else:
                 products = connection.execute(
                     "SELECT p.*, u.nickname seller_name FROM products p JOIN users u ON u.id=p.seller_id WHERE p.moderation_status='visible' AND u.status='active'" + block_sql + " ORDER BY p.created_at DESC, p.id DESC LIMIT 100",

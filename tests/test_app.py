@@ -180,6 +180,16 @@ class TinyMarketTests(unittest.TestCase):
         self.assertNotIn('<script>alert("x")</script>', body)
         self.assertIn("&lt;script&gt;", body)
 
+    def test_search_matches_any_character_in_product_title(self):
+        seller = self.seed_user("searchseller")
+        self.seed_product(seller, title="빨간 가방")
+        self.seed_product(seller, title="파란 모자")
+        self.seed_product(seller, title="노트북")
+        _, _, body = self.client.request("GET", "/?q=%EA%B0%80%EB%AA%A8")
+        self.assertIn("빨간 가방", body)
+        self.assertIn("파란 모자", body)
+        self.assertNotIn("노트북", body)
+
     def test_only_owner_can_edit_or_delete(self):
         seller = self.seed_user("seller")
         attacker = self.seed_user("attacker")
