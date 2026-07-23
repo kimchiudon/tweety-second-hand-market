@@ -26,15 +26,61 @@ Tiny보다 더 작고 가벼운 느낌의, 보안을 우선한 중고 거래 웹
 
 ```bash
 git clone https://github.com/kimchiudon/tweety-second-hand-market.git
-cd tiny-second-hand-shopping-platform
+cd tweety-second-hand-market
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e .
-python -m unittest discover -v
+python -m unittest discover -s tests -v
 python -m tiny_market
 ```
 
 브라우저에서 `http://127.0.0.1:8000`에 접속합니다. 최초 실행 시 프로젝트 루트에 `market.db`가 자동 생성됩니다.
+
+## Docker 실행
+
+Docker Desktop 또는 Docker Engine과 Compose 플러그인이 필요합니다. 저장소를 내려받은 뒤 다음 명령으로 이미지를 빌드하고 컨테이너를 실행합니다.
+
+```bash
+git clone https://github.com/kimchiudon/tweety-second-hand-market.git
+cd tweety-second-hand-market
+docker compose up --build -d
+docker compose ps
+```
+
+브라우저에서 `http://127.0.0.1:8000`에 접속합니다. 상태 확인은 다음과 같이 실행합니다.
+
+```bash
+curl http://127.0.0.1:8000/health
+```
+
+정상 응답은 `ok`입니다. SQLite DB와 업로드 사진은 Docker 볼륨 `tweety-data`에 저장되어 컨테이너를 다시 만들어도 유지됩니다. 서버를 중지할 때는 다음 명령을 사용합니다.
+
+```bash
+docker compose down
+```
+
+`docker compose down -v`는 DB와 업로드 사진이 저장된 볼륨까지 삭제하므로 데이터 초기화가 명확히 필요한 경우에만 사용합니다.
+
+### Docker 관리자 계정 생성
+
+최초 관리자 계정이 필요하면 예시 파일을 복사하고 `.env`의 비밀번호를 새 값으로 변경한 뒤 컨테이너를 시작합니다.
+
+```bash
+cp .env.example .env
+docker compose up --build -d
+```
+
+`.env`는 Git에서 제외됩니다. 실제 비밀번호를 Dockerfile, Compose 파일, README 또는 GitHub에 기록하지 마세요. 관리자 생성 후에도 `.env`를 안전하게 보관해야 하며, 제출용 화면에 비밀번호가 보이지 않도록 합니다.
+
+### Docker 자동 테스트
+
+Docker 이미지의 별도 `test` 단계를 빌드하면 의존성 설치 후 전체 자동 테스트 30개가 실행됩니다.
+
+```bash
+docker build --target test --progress=plain -t tweety-market:test .
+```
+
+운영 이미지는 비루트 사용자로 실행하며 Linux capability를 제거하고, Compose에서는 읽기 전용 루트 파일시스템과 `no-new-privileges`를 적용합니다. 쓰기가 필요한 DB·사진만 `/data` 볼륨에 저장합니다.
 
 ### 관리자 계정 생성
 
@@ -60,16 +106,14 @@ python -m scripts.create_admin
 ## 테스트
 
 ```bash
-python -m unittest discover -v
+python -m unittest discover -s tests -v
 ```
 
 테스트 30개는 비밀번호 해싱과 로그인 속도 제한, CSRF 차단, SQL 삽입·XSS 방어, 상품명 한 글자 이상 일치 검색, 카테고리 허용 목록과 검색·차단·정지 판매자 조건 결합, 소유권 검사, 닉네임 가입·중복 방지, 회원탈퇴의 비밀번호 재확인·익명화·전 세션 폐기·상품 숨김·재로그인 및 관리자 복구 차단, 상품·채팅 최대 10장 이미지, WebP·위장 파일 차단, 채팅 사진 접근 통제, 채팅 알림·읽음 처리, 실제 대화 참여자만 가능한 채팅 신고와 관리자 확인, 사용자 차단 강제, 정지 계정의 로그인·조회 허용과 거래·메시지 제한, 관리자 신고·차단·계정 정지 관리, 신고상품 삭제 권한, 상품별 1:1 메시지 격리, 송금 확인 화면, 잔액 부족, 중복 구매 방지, 신고 누적 자동 차단, 보안 헤더, 무세션 상태 확인, 관리자 최초 생성의 멱등성을 검증합니다.
 
-## Render 배포
+## Docker 배포 범위
 
-저장소 루트의 `render.yaml`은 Singapore 리전의 Python 웹 서비스, HTTPS, 운영용 Gunicorn, 상태 확인 경로와 5GB 영구 디스크를 선언합니다. Render Dashboard에서 이 저장소를 Blueprint로 연결하고 `TINY_MARKET_ADMIN_PASSWORD`를 비밀값으로 입력하면 최초 관리자 계정이 한 번만 생성됩니다.
-
-> SQLite DB와 사진을 유지하려면 유료 웹 서비스와 영구 디스크가 필요합니다. 무료 인스턴스로 설정을 바꾸면 재배포·재시작 때 회원, 채팅, 거래, 사진이 사라질 수 있습니다.
+본 과제에서는 위 Docker Compose 실행을 컨테이너 기반 배포 결과로 사용합니다. `Dockerfile`, `compose.yaml`, `.dockerignore`, 비밀값 환경변수와 영구 데이터 볼륨을 저장소에 제공하므로 같은 실행 환경을 다른 PC에서도 재현할 수 있습니다. 공개 인터넷 서비스는 제출 필수사항이 아니며 별도로 운영하지 않습니다.
 
 ## 보안 설계 요약
 
