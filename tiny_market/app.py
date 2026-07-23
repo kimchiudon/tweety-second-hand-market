@@ -140,6 +140,7 @@ class TinyMarketApp:
             match = re.fullmatch(r"/products/([1-9][0-9]*)(?:/(edit|delete|checkout|purchase))?", path)
             user_match = re.fullmatch(r"/users/([1-9][0-9]*)", path)
             chat_match = re.fullmatch(r"/chat/([1-9][0-9]*)(?:/([1-9][0-9]*))?", path)
+            chat_report_match = re.fullmatch(r"/report/chat/([1-9][0-9]*)/([1-9][0-9]*)", path)
             report_match = re.fullmatch(r"/report/(user|product)/([1-9][0-9]*)", path)
             block_match = re.fullmatch(r"/block/([1-9][0-9]*)/(toggle)", path)
             admin_match = re.fullmatch(r"/admin/(user|product)/([1-9][0-9]*)/(toggle|delete)", path)
@@ -151,6 +152,11 @@ class TinyMarketApp:
                 response = self.user_profile(int(user_match.group(1)), user, csrf_token)
             elif chat_match and method == "GET":
                 response = self.require_login(user, csrf_token) or self.chat_page(user, csrf_token, int(chat_match.group(1)), int(chat_match.group(2)) if chat_match.group(2) else None)
+            elif chat_report_match and method in {"GET", "POST"}:
+                response = self.require_login(user, csrf_token) or self.chat_report(
+                    int(chat_report_match.group(1)), int(chat_report_match.group(2)),
+                    method, form, environ, user, csrf_token,
+                )
             elif report_match and method in {"GET", "POST"}:
                 response = self.require_login(user, csrf_token) or self.report(report_match.group(1), int(report_match.group(2)), method, form, environ, user, csrf_token)
             elif block_match and method == "POST":
@@ -839,6 +845,62 @@ class TinyMarketApp:
         except sqlite3.IntegrityError:
             return self.error(409, "이미 신고했습니다", "같은 대상은 한 번만 신고할 수 있습니다.", user, csrf_token)
         return self.redirect("/")
+
+    def chat_report(self, product_id: int, counterpart_id: int, method: str, form, environ, user, csrf_token: str) -> Response:
+        with connect(self.config.database_path) as connection:
+            product = connection.execute("SELECT id,title FROM products WHERE id=?", (product_id,)).fetchone()
+            counterpart = connection.execute("SELECT id,nickname FROM users WHERE id=?", (counterpart_id,)).fetchone()
+            participated = connection.execute(
+                """SELECT 1 FROM messages
+                   WHERE product_id=? AND
+                   ((sender_id=? AND recipient_id=?) OR (sender_id=? AND recipient_id=?))
+                   LIMIT 1""",
+                (product_id, user["id"], counterpart_id, counterpart_id, user["id"]),
+            ).fetchone()
+        if not product or not counterpart or counterpart_id == user["id"] or not participated:
+            return self.error(
+                404, "신고할 채팅을 찾을 수 없습니다",
+                "실제로 참여한 1:1 상품 채팅만 신고할 수 있습니다.", user, csrf_token,
+            )
+
+        context = f'[채팅 신고 · 상품 #{product_id}: {product["title"][:80]}] '
+        max_reason_length = 500 - len(context)
+        if method == "GET":
+            return self.page_response(views.chat_report_page(
+                counterpart, product, user=user, csrf_token=csrf_token,
+                max_reason_length=max_reason_length,
+            ))
+
+        reason = form.get("reason", "").strip()
+        if not 10 <= len(reason) <= max_reason_length:
+            return self.page_response(views.chat_report_page(
+                counterpart, product, user=user, csrf_token=csrf_token,
+                max_reason_length=max_reason_length, reason=reason,
+                error_items=[f"신고 사유는 10~{max_reason_length}자로 작성해 주세요."],
+            ), 400)
+        try:
+            with transaction(self.config.database_path, immediate=True) as connection:
+                connection.execute(
+                    "INSERT INTO reports(reporter_id,target_type,target_id,reason) VALUES (?,?,?,?)",
+                    (user["id"], "user", counterpart_id, context + reason),
+                )
+                count = connection.execute(
+                    "SELECT COUNT(*) FROM reports WHERE target_type='user' AND target_id=? AND status='open'",
+                    (counterpart_id,),
+                ).fetchone()[0]
+                if count >= 5:
+                    connection.execute(
+                        "UPDATE users SET status='suspended' WHERE id=? AND role<>'admin'",
+                        (counterpart_id,),
+                    )
+                self.audit(connection, user["id"], "report.chat_create", "user", counterpart_id, environ)
+        except sqlite3.IntegrityError:
+            return self.error(
+                409, "이미 신고했습니다",
+                "같은 사용자는 일반 신고와 채팅 신고를 합쳐 한 번만 신고할 수 있습니다.",
+                user, csrf_token,
+            )
+        return self.redirect(f"/chat/{product_id}/{counterpart_id}")
 
     def admin_page(self, user, csrf_token: str) -> Response:
         with connect(self.config.database_path) as connection:

@@ -330,6 +330,63 @@ class TinyMarketTests(unittest.TestCase):
         status, _, _ = outsider.request("GET", f'/uploads/{message["image_filename"]}')
         self.assertEqual(status, 404)
 
+    def test_chat_report_requires_real_conversation_and_reaches_admin(self):
+        seller = self.seed_user("seller")
+        buyer = self.seed_user("buyer")
+        outsider = self.seed_user("outsider")
+        admin = self.seed_user("adminuser", role="admin")
+        product = self.seed_product(seller, title="채팅 신고 확인 상품")
+        buyer_client = Client(self.app)
+        buyer_client.login_as(buyer)
+        status, _, _ = buyer_client.request(
+            "POST", "/chat/send",
+            {
+                "csrf_token": buyer_client.db_csrf(),
+                "product_id": str(product),
+                "counterpart_id": str(seller),
+                "body": "거래 문의 메시지입니다",
+            },
+        )
+        self.assertEqual(status, 302)
+        status, _, chat = buyer_client.request("GET", f"/chat/{product}")
+        self.assertEqual(status, 200)
+        self.assertIn("이 채팅 신고하기", chat)
+        status, _, report_form = buyer_client.request("GET", f"/report/chat/{product}/{seller}")
+        self.assertEqual(status, 200)
+        self.assertIn("채팅 신고 확인 상품", report_form)
+        self.assertIn("nick_seller", report_form)
+        status, _, _ = buyer_client.request(
+            "POST", f"/report/chat/{product}/{seller}",
+            {"csrf_token": buyer_client.db_csrf(), "reason": "채팅에서 부적절한 거래를 반복적으로 요구했습니다"},
+        )
+        self.assertEqual(status, 302)
+        with connect(self.app.config.database_path) as connection:
+            report = connection.execute(
+                "SELECT target_type,target_id,reason FROM reports WHERE reporter_id=?",
+                (buyer,),
+            ).fetchone()
+        self.assertEqual(report["target_type"], "user")
+        self.assertEqual(report["target_id"], seller)
+        self.assertIn("[채팅 신고", report["reason"])
+        self.assertIn("채팅 신고 확인 상품", report["reason"])
+
+        admin_client = Client(self.app)
+        admin_client.login_as(admin)
+        status, _, admin_page = admin_client.request("GET", "/admin")
+        self.assertEqual(status, 200)
+        self.assertIn("채팅 신고 확인 상품", admin_page)
+        self.assertIn("부적절한 거래", admin_page)
+
+        outsider_client = Client(self.app)
+        outsider_client.login_as(outsider)
+        status, _, _ = outsider_client.request("GET", f"/report/chat/{product}/{seller}")
+        self.assertEqual(status, 404)
+        status, _, _ = buyer_client.request(
+            "POST", f"/report/chat/{product}/{seller}",
+            {"csrf_token": buyer_client.db_csrf(), "reason": "같은 상대를 다시 신고하려는 충분한 사유입니다"},
+        )
+        self.assertEqual(status, 409)
+
     def test_user_block_hides_products_and_prevents_chat_and_purchase(self):
         seller = self.seed_user("seller")
         buyer = self.seed_user("buyer")
