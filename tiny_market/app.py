@@ -105,6 +105,11 @@ class TinyMarketApp:
             form = {}
             files = {}
 
+        if path == "/admin" or path.startswith("/admin/"):
+            denied = self.require_admin_session(session, user, csrf_token)
+            if denied:
+                return self.with_cookie(denied, cookie_header)
+
         response: Response
         if path == "/" and method == "GET":
             response = self.home(environ, user, csrf_token)
@@ -273,6 +278,26 @@ class TinyMarketApp:
             return denied
         if user.get("role") != "admin":
             return self.error(403, "권한이 없습니다", "관리자만 접근할 수 있습니다.", user, csrf_token)
+        return None
+
+    def require_admin_session(self, session, user, csrf_token: str):
+        denied = self.require_admin(user, csrf_token)
+        if denied:
+            return denied
+        with connect(self.config.database_path) as connection:
+            authorized = connection.execute(
+                """SELECT 1
+                   FROM sessions s JOIN users u ON u.id=s.user_id
+                   WHERE s.token_hash=? AND s.user_id=? AND s.expires_at>=?
+                     AND u.role='admin'
+                   LIMIT 1""",
+                (session["token_hash"], user["id"], int(time.time())),
+            ).fetchone()
+        if not authorized:
+            return self.error(
+                403, "관리자 세션을 확인할 수 없습니다",
+                "다시 로그인한 뒤 관리자 페이지를 이용해 주세요.", user, csrf_token,
+            )
         return None
 
     def serve_static(self, method: str, path: str) -> Response:
@@ -823,9 +848,11 @@ class TinyMarketApp:
         return self.redirect(f"/users/{target_id}")
 
     def report(self, target_type: str, target_id: int, method: str, form, environ, user, csrf_token: str) -> Response:
-        table = "products" if target_type == "product" else "users"
         with connect(self.config.database_path) as connection:
-            target = connection.execute(f"SELECT * FROM {table} WHERE id=?", (target_id,)).fetchone()
+            if target_type == "product":
+                target = connection.execute("SELECT * FROM products WHERE id=?", (target_id,)).fetchone()
+            else:
+                target = connection.execute("SELECT * FROM users WHERE id=?", (target_id,)).fetchone()
         if not target or (target_type == "product" and target["seller_id"] == user["id"]) or (target_type == "user" and target_id == user["id"]):
             return self.error(404, "신고 대상을 찾을 수 없습니다", "본인 또는 존재하지 않는 대상은 신고할 수 없습니다.", user, csrf_token)
         if method == "GET":
