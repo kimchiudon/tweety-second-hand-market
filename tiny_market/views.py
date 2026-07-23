@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from html import escape
+from urllib.parse import urlencode
 
 
 CATEGORIES = {
@@ -83,7 +84,7 @@ def errors(items: list[str]) -> str:
     return f'<div class="alert error" role="alert"><strong>입력 내용을 확인해 주세요.</strong><ul>{rows}</ul></div>'
 
 
-def home(products, *, query: str, user=None, csrf_token: str = "") -> str:
+def home(products, *, query: str, category: str = "", user=None, csrf_token: str = "") -> str:
     cards = []
     for product in products:
         status = '<span class="badge sold">판매 완료</span>' if product["status"] == "sold" else ""
@@ -96,6 +97,19 @@ def home(products, *, query: str, user=None, csrf_token: str = "") -> str:
           <p class="muted">{e(CONDITIONS[product['item_condition']])} · 판매자 {e(product['seller_name'])}</p>
         </article>""")
     listing = "".join(cards) if cards else '<div class="empty">조건에 맞는 상품이 없습니다.</div>'
+    category_links = []
+    for value, label in [("", "전체"), *CATEGORIES.items()]:
+        params = {}
+        if query:
+            params["q"] = query
+        if value:
+            params["category"] = value
+        href = "/?" + urlencode(params) if params else "/"
+        text = f"<strong>{e(label)}</strong>" if value == category else e(label)
+        category_links.append(f'<a href="{e(href)}">{text}</a>')
+    category_navigation = " · ".join(category_links)
+    hidden_category = f'<input type="hidden" name="category" value="{e(category)}">' if category else ""
+    section_title = CATEGORIES.get(category, "최근 상품")
     content = f"""
     <section class="hero">
       <div class="hero-copy"><p class="eyebrow">Tiny보다 더 작은 중고 장터</p>
@@ -105,10 +119,12 @@ def home(products, *, query: str, user=None, csrf_token: str = "") -> str:
     </section>
     <form class="search" method="get" action="/">
       <label class="sr-only" for="q">상품 검색</label>
+      {hidden_category}
       <input id="q" name="q" maxlength="80" value="{e(query)}" placeholder="상품명이나 설명을 검색하세요">
       <button type="submit">검색</button>
     </form>
-    <div class="section-title"><h2>최근 상품</h2><span>{len(products)}개</span></div>
+    <nav aria-label="상품 분류"><p>{category_navigation}</p></nav>
+    <div class="section-title"><h2>{e(section_title)}</h2><span>{len(products)}개</span></div>
     <section class="grid">{listing}</section>"""
     return layout("중고 거래", content, user=user, csrf_token=csrf_token)
 
@@ -252,7 +268,8 @@ def my_page(selling, bought, transfers, blocked_users, *, user, csrf_token: str)
         f'<tr><td><a href="/users/{b["user_id"]}">{e(b["nickname"])}</a></td><td>{e(b["created_at"])}</td><td><form method="post" action="/block/{b["user_id"]}/toggle"><input type="hidden" name="csrf_token" value="{e(csrf_token)}"><button class="small" type="submit">차단 해제</button></form></td></tr>'
         for b in blocked_users
     ) or '<tr><td colspan="3">차단한 사용자가 없습니다.</td></tr>'
-    content = f"""<section class="page-head"><p class="eyebrow">내 상점</p><h1>{e(user['nickname'])}님의 거래</h1><p class="muted">로그인 아이디: {e(user['username'])}</p><p class="balance">보유 포인트 <strong>{money(user['balance'])}</strong></p><p class="help">상품 구매 시 결제 금액이 판매자에게 자동 송금됩니다.</p><p>{e(user.get('bio') or '아직 소개글이 없습니다.')}</p><a class="button small" href="/profile/edit">프로필·비밀번호 변경</a></section>
+    withdraw_link = '<a class="button small danger" href="/account/withdraw">회원탈퇴</a>' if user.get("role") != "admin" else ""
+    content = f"""<section class="page-head"><p class="eyebrow">내 상점</p><h1>{e(user['nickname'])}님의 거래</h1><p class="muted">로그인 아이디: {e(user['username'])}</p><p class="balance">보유 포인트 <strong>{money(user['balance'])}</strong></p><p class="help">상품 구매 시 결제 금액이 판매자에게 자동 송금됩니다.</p><p>{e(user.get('bio') or '아직 소개글이 없습니다.')}</p><div class="actions"><a class="button small" href="/profile/edit">프로필·비밀번호 변경</a>{withdraw_link}</div></section>
     <section class="panel"><div class="section-title"><h2>판매 상품</h2><span>{len(selling)}개</span></div>{rows(selling, 'selling')}</section>
     <section class="panel"><div class="section-title"><h2>구매 상품</h2><span>{len(bought)}개</span></div>{rows(bought, 'bought')}</section>
     <section class="panel table-wrap"><h2>포인트 송금 내역</h2><table><thead><tr><th>일시</th><th>상품</th><th>구분</th><th>금액</th><th>상대방</th></tr></thead><tbody>{transfer_rows}</tbody></table></section>
@@ -274,6 +291,11 @@ def profile_edit(*, user, csrf_token: str, error_items=None) -> str:
     content = f'''<section class="form-shell"><p class="eyebrow">계정 관리</p><h1>프로필·비밀번호 변경</h1>{errors(error_items or [])}
     <form method="post" action="/profile/edit"><input type="hidden" name="csrf_token" value="{e(csrf_token)}"><label for="nickname">닉네임</label><input id="nickname" name="nickname" required minlength="2" maxlength="20" value="{e(user.get("nickname", ""))}"><p class="help">판매자명으로 표시되며 중복될 수 없습니다.</p><label for="bio">소개글</label><textarea id="bio" name="bio" maxlength="300" rows="5">{e(user.get("bio", ""))}</textarea><label for="current_password">현재 비밀번호</label><input id="current_password" type="password" name="current_password" required autocomplete="current-password"><label for="new_password">새 비밀번호 (변경할 때만)</label><input id="new_password" type="password" name="new_password" maxlength="128" autocomplete="new-password"><button type="submit">변경사항 저장</button></form></section>'''
     return layout("프로필 변경", content, user=user, csrf_token=csrf_token)
+
+
+def withdraw_page(*, user, csrf_token: str, error_items=None) -> str:
+    content = f'''<section class="form-shell narrow"><p class="eyebrow">계정 관리</p><h1>회원탈퇴</h1>{errors(error_items or [])}<div class="restriction-note"><strong>탈퇴 전 확인해 주세요.</strong><p>판매 상품은 즉시 숨겨지고 상품·프로필 페이지에 “탈퇴한 회원입니다”가 표시됩니다. 개인정보는 익명화되고 모든 기기에서 로그아웃되며, 거래·신고·채팅 기록은 분쟁 대응을 위해 보존됩니다. 탈퇴는 직접 되돌릴 수 없습니다.</p></div><form method="post" action="/account/withdraw"><input type="hidden" name="csrf_token" value="{e(csrf_token)}"><label for="withdraw-password">현재 비밀번호</label><input id="withdraw-password" type="password" name="current_password" required autocomplete="current-password"><label for="withdraw-confirmation">확인을 위해 ‘회원탈퇴’를 입력해 주세요</label><input id="withdraw-confirmation" name="confirmation" required maxlength="4" autocomplete="off"><button class="danger full" type="submit">회원탈퇴 확정</button></form><p><a href="/my">취소하고 내 상점으로 돌아가기</a></p></section>'''
+    return layout("회원탈퇴", content, user=user, csrf_token=csrf_token)
 
 
 def chat_inbox(conversations, *, user, csrf_token: str) -> str:
@@ -317,6 +339,8 @@ def admin_page(users, products, reports, blocks, *, user, csrf_token: str) -> st
     def user_action(u) -> str:
         if u["role"] == "admin":
             return '<span class="muted">관리자 보호</span>'
+        if u["deleted_at"] is not None:
+            return '<span class="muted">탈퇴 회원</span>'
         label = "활동 정지 해제" if u["status"] == "suspended" else "계정 활동 정지"
         css = "small" if u["status"] == "suspended" else "small danger"
         return f'<form method="post" action="/admin/user/{u["id"]}/toggle"><input type="hidden" name="csrf_token" value="{e(csrf_token)}"><button class="{css}" type="submit">{label}</button></form>'

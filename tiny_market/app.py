@@ -135,6 +135,10 @@ class TinyMarketApp:
             response = self.require_login(user, csrf_token) or self.page_response(views.profile_edit(user=user, csrf_token=csrf_token))
         elif path == "/profile/edit" and method == "POST":
             response = self.require_login(user, csrf_token) or self.update_profile(form, environ, user, csrf_token)
+        elif path == "/account/withdraw" and method == "GET":
+            response = self.require_login(user, csrf_token) or self.withdraw_page(user, csrf_token)
+        elif path == "/account/withdraw" and method == "POST":
+            response = self.require_login(user, csrf_token) or self.withdraw_account(form, environ, session, user, csrf_token)
         elif path == "/chat" and method == "GET":
             response = self.require_login(user, csrf_token) or self.chat_inbox(user, csrf_token)
         elif path == "/chat/send" and method == "POST":
@@ -201,11 +205,11 @@ class TinyMarketApp:
             session = None
             if supplied_token:
                 session = connection.execute(
-                    "SELECT s.*, u.username, u.nickname, u.bio, u.balance, u.role, u.status user_status FROM sessions s LEFT JOIN users u ON u.id = s.user_id WHERE s.token_hash = ? AND s.expires_at >= ?",
+                    "SELECT s.*, u.username, u.nickname, u.bio, u.balance, u.role, u.status user_status,u.deleted_at FROM sessions s LEFT JOIN users u ON u.id = s.user_id WHERE s.token_hash = ? AND s.expires_at >= ?",
                     (token_hash(supplied_token), now),
                 ).fetchone()
             if session:
-                user = ({"id": session["user_id"], "username": session["username"], "nickname": session["nickname"], "bio": session["bio"], "balance": session["balance"], "role": session["role"], "status": session["user_status"]} if session["user_id"] else None)
+                user = ({"id": session["user_id"], "username": session["username"], "nickname": session["nickname"], "bio": session["bio"], "balance": session["balance"], "role": session["role"], "status": session["user_status"], "deleted_at": session["deleted_at"]} if session["user_id"] and session["deleted_at"] is None else None)
                 if user:
                     user["unread_count"] = connection.execute(
                         "SELECT COUNT(*) FROM messages m JOIN products p ON p.id=m.product_id WHERE m.recipient_id=? AND m.read_at IS NULL",
@@ -321,7 +325,15 @@ class TinyMarketApp:
         target = self.upload_dir / name
         with connect(self.config.database_path) as connection:
             public_image = connection.execute(
-                "SELECT 1 FROM product_images WHERE filename=? UNION SELECT 1 FROM products WHERE image_filename=? LIMIT 1",
+                """SELECT 1 FROM product_images pi
+                   JOIN products p ON p.id=pi.product_id JOIN users u ON u.id=p.seller_id
+                   WHERE pi.filename=? AND p.moderation_status='visible'
+                     AND u.status='active' AND u.deleted_at IS NULL
+                   UNION
+                   SELECT 1 FROM products p JOIN users u ON u.id=p.seller_id
+                   WHERE p.image_filename=? AND p.moderation_status='visible'
+                     AND u.status='active' AND u.deleted_at IS NULL
+                   LIMIT 1""",
                 (name, name),
             ).fetchone()
         if not public_image or not target.is_file():
@@ -351,13 +363,21 @@ class TinyMarketApp:
         return Response(target.read_bytes(), 200, [("Content-Type", content_type), ("Cache-Control", "private, no-store")])
 
     def home(self, environ: dict, user, csrf_token: str) -> Response:
-        query = parse_qs(environ.get("QUERY_STRING", ""), max_num_fields=5).get("q", [""])[-1].strip()[:80]
+        query_params = parse_qs(environ.get("QUERY_STRING", ""), max_num_fields=5)
+        query = query_params.get("q", [""])[-1].strip()[:80]
+        category = query_params.get("category", [""])[-1].strip()
+        if category and category not in views.CATEGORIES:
+            return self.error(400, "올바르지 않은 상품 분류입니다", "제공되는 상품 분류만 선택해 주세요.", user, csrf_token)
         with connect(self.config.database_path) as connection:
             block_sql = ""
+            category_sql = ""
             params: list[object] = []
             if user:
                 block_sql = " AND NOT EXISTS (SELECT 1 FROM user_blocks b WHERE (b.blocker_id=? AND b.blocked_id=p.seller_id) OR (b.blocker_id=p.seller_id AND b.blocked_id=?))"
                 params.extend([user["id"], user["id"]])
+            if category:
+                category_sql = " AND p.category=?"
+                params.append(category)
             if query:
                 # Match when at least one meaningful character from the query
                 # appears in the product title. Deduplication and a hard cap
@@ -368,6 +388,7 @@ class TinyMarketApp:
                     products = connection.execute(
                         "SELECT p.*, u.nickname seller_name FROM products p JOIN users u ON u.id=p.seller_id WHERE p.moderation_status='visible' AND u.status='active'"
                         + block_sql
+                        + category_sql
                         + f" AND ({character_sql}) ORDER BY p.created_at DESC, p.id DESC LIMIT 100",
                         (*params, *(f"%{character}%" for character in characters)),
                     ).fetchall()
@@ -375,10 +396,10 @@ class TinyMarketApp:
                     products = []
             else:
                 products = connection.execute(
-                    "SELECT p.*, u.nickname seller_name FROM products p JOIN users u ON u.id=p.seller_id WHERE p.moderation_status='visible' AND u.status='active'" + block_sql + " ORDER BY p.created_at DESC, p.id DESC LIMIT 100",
+                    "SELECT p.*, u.nickname seller_name FROM products p JOIN users u ON u.id=p.seller_id WHERE p.moderation_status='visible' AND u.status='active'" + block_sql + category_sql + " ORDER BY p.created_at DESC, p.id DESC LIMIT 100",
                     params,
                 ).fetchall()
-        return self.page_response(views.home(products, query=query, user=user, csrf_token=csrf_token))
+        return self.page_response(views.home(products, query=query, category=category, user=user, csrf_token=csrf_token))
 
     def register(self, form: dict, environ: dict, session) -> Response:
         username = form.get("username", "").strip()
@@ -417,11 +438,11 @@ class TinyMarketApp:
                 "SELECT COUNT(*) FROM login_attempts WHERE identity_hash=? AND attempted_at>=? AND successful=0",
                 (ip_identity, cutoff),
             ).fetchone()[0]
-            user = connection.execute("SELECT id, username, password_hash, status FROM users WHERE username=?", (username,)).fetchone()
+            user = connection.execute("SELECT id,username,password_hash,status,deleted_at FROM users WHERE username=?", (username,)).fetchone()
         if failures >= 5 or ip_failures >= 20:
             return self.page_response(views.auth_page("login", form={"username": username}, error_items=["로그인 시도가 너무 많습니다. 15분 후 다시 시도해 주세요."], csrf_token=session["csrf_token"]), 429)
         password_valid = verify_password(password, user["password_hash"] if user else FAKE_PASSWORD_HASH)
-        valid = bool(user) and password_valid
+        valid = bool(user) and user["deleted_at"] is None and password_valid
         with transaction(self.config.database_path) as connection:
             connection.execute("DELETE FROM login_attempts WHERE attempted_at < ?", (int(time.time()) - 86400,))
             connection.execute("INSERT INTO login_attempts(identity_hash, attempted_at, successful) VALUES (?, ?, ?)", (identity, int(time.time()), int(valid)))
@@ -524,7 +545,7 @@ class TinyMarketApp:
 
     def product_route(self, product_id: int, action: str | None, method: str, form, files, environ, user, csrf_token: str) -> Response:
         with connect(self.config.database_path) as connection:
-            product = connection.execute("SELECT p.*, u.nickname seller_name,u.status seller_status FROM products p JOIN users u ON u.id=p.seller_id WHERE p.id=?", (product_id,)).fetchone()
+            product = connection.execute("SELECT p.*,u.nickname seller_name,u.status seller_status,u.deleted_at seller_deleted_at FROM products p JOIN users u ON u.id=p.seller_id WHERE p.id=?", (product_id,)).fetchone()
             image_filenames = [row[0] for row in connection.execute("SELECT filename FROM product_images WHERE product_id=? ORDER BY position", (product_id,))] if product else []
             chat_image_filenames = [row[0] for row in connection.execute("SELECT mi.filename FROM message_images mi JOIN messages m ON m.id=mi.message_id WHERE m.product_id=?", (product_id,))] if product else []
             blocked = user and product and user["id"] != product["seller_id"] and connection.execute(
@@ -533,6 +554,8 @@ class TinyMarketApp:
             ).fetchone()
         if not product:
             return self.error(404, "상품을 찾을 수 없습니다", "삭제되었거나 존재하지 않는 상품입니다.", user, csrf_token)
+        if product["seller_deleted_at"] is not None:
+            return self.error(404, "탈퇴한 회원입니다", "판매자가 탈퇴하여 이 상품 페이지를 이용할 수 없습니다.", user, csrf_token)
         product = dict(product)
         product["image_filenames"] = image_filenames or ([product["image_filename"]] if product["image_filename"] else [])
         if blocked and user.get("role") != "admin":
@@ -671,12 +694,70 @@ class TinyMarketApp:
 
     def user_profile(self, user_id: int, user, csrf_token: str) -> Response:
         with connect(self.config.database_path) as connection:
-            profile = connection.execute("SELECT id,username,nickname,bio,status FROM users WHERE id=?", (user_id,)).fetchone()
+            profile = connection.execute("SELECT id,username,nickname,bio,status,deleted_at FROM users WHERE id=?", (user_id,)).fetchone()
             products = connection.execute("SELECT id,title,price FROM products WHERE seller_id=? AND status='available' AND moderation_status='visible' ORDER BY created_at DESC", (user_id,)).fetchall()
             is_blocked = bool(user and connection.execute("SELECT 1 FROM user_blocks WHERE blocker_id=? AND blocked_id=?", (user["id"], user_id)).fetchone())
+        if profile and profile["deleted_at"] is not None:
+            return self.error(404, "탈퇴한 회원입니다", "탈퇴한 회원의 프로필은 이용할 수 없습니다.", user, csrf_token)
         if not profile or profile["status"] != "active":
             return self.error(404, "사용자를 찾을 수 없습니다", "존재하지 않거나 이용이 제한된 사용자입니다.", user, csrf_token)
         return self.page_response(views.profile_page(profile, products, is_blocked=is_blocked, user=user, csrf_token=csrf_token))
+
+    def withdraw_page(self, user, csrf_token: str, *, error_items=None, status: int = 200) -> Response:
+        if user.get("role") == "admin":
+            return self.error(403, "관리자는 탈퇴할 수 없습니다", "관리자 계정 보호를 위해 일반 회원만 직접 탈퇴할 수 있습니다.", user, csrf_token)
+        return self.page_response(views.withdraw_page(user=user, csrf_token=csrf_token, error_items=error_items), status)
+
+    def withdraw_account(self, form, environ, session, user, csrf_token: str) -> Response:
+        if user.get("role") == "admin":
+            return self.error(403, "관리자는 탈퇴할 수 없습니다", "관리자 계정 보호를 위해 일반 회원만 직접 탈퇴할 수 있습니다.", user, csrf_token)
+        password = form.get("current_password", "")
+        confirmed = form.get("confirmation", "").strip() == "회원탈퇴"
+        with connect(self.config.database_path) as connection:
+            account = connection.execute(
+                "SELECT password_hash,deleted_at FROM users WHERE id=?",
+                (user["id"],),
+            ).fetchone()
+        issues = []
+        if not account or account["deleted_at"] is not None:
+            return self.error(409, "이미 탈퇴한 회원입니다", "이 계정은 더 이상 이용할 수 없습니다.", None, csrf_token)
+        if not verify_password(password, account["password_hash"]):
+            issues.append("현재 비밀번호가 올바르지 않습니다.")
+        if not confirmed:
+            issues.append("확인란에 ‘회원탈퇴’를 정확히 입력해 주세요.")
+        if issues:
+            return self.withdraw_page(user, csrf_token, error_items=issues, status=400)
+
+        # '-'는 일반 가입 아이디·닉네임의 허용 문자에 없으므로 기존 회원값과
+        # 충돌하지 않으면서 레코드 참조 무결성을 유지하는 익명 식별자가 된다.
+        anonymous_username = f"withdrawn-{user['id']}"[:24]
+        anonymous_nickname = f"탈퇴한회원-{user['id']}"[:20]
+        disabled_password = hash_password(new_session_token())
+        with transaction(self.config.database_path, immediate=True) as connection:
+            current = connection.execute(
+                "SELECT password_hash,deleted_at,role FROM users WHERE id=?",
+                (user["id"],),
+            ).fetchone()
+            if not current or current["deleted_at"] is not None or current["role"] == "admin" or current["password_hash"] != account["password_hash"]:
+                return self.error(409, "탈퇴할 수 없습니다", "계정 상태가 변경되었습니다.", user, csrf_token)
+            connection.execute(
+                """UPDATE users
+                   SET username=?,nickname=?,password_hash=?,bio='',status='suspended',
+                       deleted_at=CURRENT_TIMESTAMP
+                   WHERE id=? AND deleted_at IS NULL AND role<>'admin'""",
+                (anonymous_username, anonymous_nickname, disabled_password, user["id"]),
+            )
+            connection.execute(
+                "UPDATE products SET moderation_status='hidden',updated_at=CURRENT_TIMESTAMP WHERE seller_id=?",
+                (user["id"],),
+            )
+            connection.execute(
+                "DELETE FROM user_blocks WHERE blocker_id=? OR blocked_id=?",
+                (user["id"], user["id"]),
+            )
+            self.audit(connection, user["id"], "user.withdraw", "user", user["id"], environ)
+            connection.execute("DELETE FROM sessions WHERE user_id=?", (user["id"],))
+        return self.redirect("/", self.cookie_value("", delete=True))
 
     def update_profile(self, form, environ, user, csrf_token: str) -> Response:
         bio = form.get("bio", "").strip()
@@ -834,8 +915,8 @@ class TinyMarketApp:
         if target_id == user["id"]:
             return self.error(400, "차단할 수 없습니다", "본인 계정은 차단할 수 없습니다.", user, csrf_token)
         with transaction(self.config.database_path, immediate=True) as connection:
-            target = connection.execute("SELECT role FROM users WHERE id=?", (target_id,)).fetchone()
-            if not target or target["role"] == "admin":
+            target = connection.execute("SELECT role,deleted_at FROM users WHERE id=?", (target_id,)).fetchone()
+            if not target or target["role"] == "admin" or target["deleted_at"] is not None:
                 return self.error(404, "사용자를 찾을 수 없습니다", "일반 사용자만 차단할 수 있습니다.", user, csrf_token)
             existing = connection.execute("SELECT id FROM user_blocks WHERE blocker_id=? AND blocked_id=?", (user["id"], target_id)).fetchone()
             if existing:
@@ -853,7 +934,7 @@ class TinyMarketApp:
                 target = connection.execute("SELECT * FROM products WHERE id=?", (target_id,)).fetchone()
             else:
                 target = connection.execute("SELECT * FROM users WHERE id=?", (target_id,)).fetchone()
-        if not target or (target_type == "product" and target["seller_id"] == user["id"]) or (target_type == "user" and target_id == user["id"]):
+        if not target or (target_type == "product" and target["seller_id"] == user["id"]) or (target_type == "user" and (target_id == user["id"] or target["deleted_at"] is not None)):
             return self.error(404, "신고 대상을 찾을 수 없습니다", "본인 또는 존재하지 않는 대상은 신고할 수 없습니다.", user, csrf_token)
         if method == "GET":
             return self.page_response(views.report_page(target_type, target, user=user, csrf_token=csrf_token))
@@ -932,10 +1013,10 @@ class TinyMarketApp:
     def admin_page(self, user, csrf_token: str) -> Response:
         with connect(self.config.database_path) as connection:
             users = connection.execute(
-                """SELECT u.id,u.username,u.nickname,u.role,u.status,u.balance,
+                """SELECT u.id,u.username,u.nickname,u.role,u.status,u.deleted_at,u.balance,
                    COUNT(r.id) user_report_count,GROUP_CONCAT(CASE WHEN r.status='open' THEN r.reason END,' / ') open_report_reasons
                    FROM users u LEFT JOIN reports r ON r.target_type='user' AND r.target_id=u.id
-                   GROUP BY u.id,u.username,u.nickname,u.role,u.status,u.balance ORDER BY u.created_at DESC"""
+                   GROUP BY u.id,u.username,u.nickname,u.role,u.status,u.deleted_at,u.balance ORDER BY u.created_at DESC"""
             ).fetchall()
             products = connection.execute(
                 """SELECT p.id,p.title,p.moderation_status,p.image_filename,u.nickname seller_name,
@@ -984,9 +1065,11 @@ class TinyMarketApp:
                     return self.error(405, "허용되지 않는 요청", "사용자에게는 상태 전환만 사용할 수 있습니다.", user, csrf_token)
                 if target_id == user["id"]:
                     return self.error(409, "상태를 바꿀 수 없습니다", "현재 로그인한 관리자 계정은 정지할 수 없습니다.", user, csrf_token)
-                target = connection.execute("SELECT status,role FROM users WHERE id=?", (target_id,)).fetchone()
+                target = connection.execute("SELECT status,role,deleted_at FROM users WHERE id=?", (target_id,)).fetchone()
                 if not target or target["role"] == "admin":
                     return self.error(404, "사용자를 찾을 수 없습니다", "일반 사용자만 관리할 수 있습니다.", user, csrf_token)
+                if target["deleted_at"] is not None:
+                    return self.error(409, "탈퇴한 회원입니다", "탈퇴한 계정은 다시 활성화할 수 없습니다.", user, csrf_token)
                 new_status = "active" if target["status"] == "suspended" else "suspended"
                 connection.execute("UPDATE users SET status=? WHERE id=?", (new_status, target_id))
             else:
